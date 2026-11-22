@@ -233,7 +233,11 @@ func (s *Store) SupplyHistory(ctx context.Context, sac string, limit int) ([]cov
 		if err := rows.Scan(&amount, &ledger, &sp.PostedAt, &sp.BreakdownHash, &sp.Poster, &sp.TxHash, &sp.Source); err != nil {
 			return nil, err
 		}
-		sp.Amount = mustBig(amount)
+		n, err := parseAmount(amount)
+		if err != nil {
+			return nil, fmt.Errorf("supply snapshot for %s at ledger %d: %w", sac, ledger, err)
+		}
+		sp.Amount = n
 		sp.Ledger = uint32(ledger)
 		out = append(out, sp)
 	}
@@ -288,8 +292,12 @@ func (s *Store) queryReports(ctx context.Context, sql string, args ...any) ([]co
 		if err := rows.Scan(&tier, &amount, &r.AsOf, &r.PostedAt, &r.Reporter, &r.DocHash, &r.DocURI, &r.TxHash, &r.Source, &r.DocCheck); err != nil {
 			return nil, err
 		}
+		n, err := parseAmount(amount)
+		if err != nil {
+			return nil, fmt.Errorf("reserve report tier %d as of %s: %w", tier, r.AsOf.Format(time.RFC3339), err)
+		}
 		r.Tier = uint32(tier)
-		r.Amount = mustBig(amount)
+		r.Amount = n
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -346,12 +354,16 @@ func (s *Store) SaveToml(ctx context.Context, sac string, info []byte, lookupErr
 	return err
 }
 
-func mustBig(s string) *big.Int {
+// parseAmount reads a NUMERIC(40, 0) amount scanned as text. A value that is
+// not a base-10 integer (NUMERIC also holds 'NaN' and, from Postgres 14,
+// 'Infinity') is an error, never zero: a zero would be served as zero supply
+// or zero reserves, which the API reports as a real reading.
+func parseAmount(s string) (*big.Int, error) {
 	n, ok := new(big.Int).SetString(s, 10)
 	if !ok {
-		return new(big.Int)
+		return nil, fmt.Errorf("amount %q is not an integer", s)
 	}
-	return n
+	return n, nil
 }
 
 // ---- advisory lock --------------------------------------------------------

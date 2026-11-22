@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
@@ -218,5 +219,48 @@ func TestOpenAPISpec(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "openapi: 3.1.0") {
 		t.Fatalf("expected openapi 3.1.0 spec, got: %s", string(body))
+	}
+}
+
+// unreadable is a store whose amount reads fail, as the real store's do when a
+// stored NUMERIC does not parse.
+type unreadable struct{ *fake }
+
+var errUnreadable = errors.New(`supply snapshot at ledger 100: amount "NaN" is not an integer`)
+
+func (unreadable) LatestSupply(context.Context, string) (*coverage.Supply, error) {
+	return nil, errUnreadable
+}
+func (unreadable) SupplyHistory(context.Context, string, int) ([]coverage.Supply, error) {
+	return nil, errUnreadable
+}
+func (unreadable) LatestReports(context.Context, string) (map[uint32]coverage.Report, error) {
+	return nil, errUnreadable
+}
+func (unreadable) ReportHistory(context.Context, string, int) ([]coverage.Report, error) {
+	return nil, errUnreadable
+}
+
+// An amount the store cannot read fails the request instead of being served,
+// so no endpoint reports a corrupted figure as zero supply or zero reserves.
+func TestUnreadableAmountsFailTheRequest(t *testing.T) {
+	s := &Server{
+		Store: unreadable{&fake{assets: []coverage.Asset{{SAC: sac, Code: "PUSD", Issuer: "GISS"}}}},
+		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Now:   func() time.Time { return now },
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	for _, path := range []string{
+		"/v1/assets",
+		"/v1/assets/" + sac,
+		"/v1/assets/" + sac + "/supply",
+		"/v1/assets/" + sac + "/reports",
+	} {
+		body := get(t, srv, path, http.StatusInternalServerError)
+		if body["supply"] != nil || body["coverage"] != nil {
+			t.Errorf("%s served figures alongside the error: %+v", path, body)
+		}
 	}
 }
