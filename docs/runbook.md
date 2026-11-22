@@ -65,8 +65,10 @@ go run ./cmd/plimsoll-indexer
 Containers: `docker compose up --build` (Postgres on host port 54329, indexer on
 8080). Render: see `render.yaml`; set `SUPPLY_POSTER_SECRET` in the dashboard.
 
-The schema (`internal/store/schema.sql`) is applied idempotently on start, so
-deploying a new version needs no separate migration step. Stop with `SIGINT` or
+Pending schema migrations (`internal/store/migrations/`) are applied on start,
+under an advisory lock, so deploying a new version needs no separate migration
+step and several instances can start at once. `schema_migrations` records the
+version each database is at. Stop with `SIGINT` or
 `SIGTERM`; the HTTP server drains for up to 10 seconds.
 
 ## Health checks
