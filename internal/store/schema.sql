@@ -79,3 +79,19 @@ CREATE TABLE IF NOT EXISTS breakdowns (
     body        TEXT NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Every contract event ingestion receives, decoded or not, as RPC returned it.
+-- RPC keeps events for about seven days; these let `plimsoll-indexer replay`
+-- rebuild the typed tables above after a decoder change. closed_at is null when
+-- RPC's ledgerClosedAt did not parse.
+CREATE TABLE IF NOT EXISTS raw_events (
+    id          TEXT PRIMARY KEY,
+    contract    TEXT NOT NULL,
+    ledger      BIGINT NOT NULL,
+    closed_at   TIMESTAMPTZ,
+    tx_hash     TEXT NOT NULL,
+    topics_xdr  TEXT[] NOT NULL,
+    value_xdr   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS raw_events_contract_ledger
+    ON raw_events (contract, ledger);
