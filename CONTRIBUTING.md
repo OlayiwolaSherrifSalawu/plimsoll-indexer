@@ -34,8 +34,36 @@ the ingest loop, not decoding of contract events.
 - [ ] One change per pull request, linked to its issue.
 - [ ] `gofmt -l .` prints nothing; `go vet ./...`, `go test ./...`, and `golangci-lint run` pass.
 - [ ] New behaviour has tests. HTTP and Horizon interactions are tested with `httptest`.
-- [ ] Schema changes are additive and idempotent (`IF NOT EXISTS`) in `internal/store/schema.sql`.
+- [ ] Schema changes are a new migration in `internal/store/migrations/` (see below), with a test against embedded Postgres.
 - [ ] Conventional Commits: `feat(api): …`, `fix(poster): …`.
+
+## Schema migrations
+
+The schema lives in numbered files in `internal/store/migrations/`. On start,
+`store.Open` applies every file the database has not recorded yet, in order,
+inside one transaction, and records each in the `schema_migrations` table. The
+transaction holds a Postgres advisory lock, so instances starting together
+apply each migration once and the rest wait for it.
+
+To change the schema:
+
+1. Add the next file, `NNNN_short_description.sql`: four digits, one more than
+   the highest existing version, lower case and underscores. A gap, a repeated
+   number or any other name fails `go test` and the indexer's start.
+2. Write plain SQL. A migration can change a column type, backfill data or drop
+   an index; it no longer has to be idempotent, because it runs exactly once.
+   It runs in a transaction, so `CREATE INDEX CONCURRENTLY` and other
+   statements that refuse one cannot be used.
+3. Never edit a migration that has been merged: databases that already ran it
+   will not run it again. Fix it with a new migration.
+4. Test it in `internal/store` against embedded Postgres. The tests start one
+   server for the package (the binaries download once, to
+   `~/.embedded-postgres-go`) and give each test its own database through
+   `newDatabase(t)` or `openStore(t)`. `go test -short ./...` skips them.
+
+`0001_initial.sql` is the schema from before migrations. Its statements are
+`IF NOT EXISTS`, so a database created by an older indexer adopts it without
+changes.
 
 ## Standards
 

@@ -3,7 +3,6 @@ package store
 
 import (
 	"context"
-	_ "embed"
 	"errors"
 	"fmt"
 	"math/big"
@@ -16,9 +15,6 @@ import (
 	"github.com/plimsoll-protocol/plimsoll-indexer/internal/soroban"
 )
 
-//go:embed schema.sql
-var schema string
-
 var ErrNotFound = errors.New("not found")
 
 // ErrLockNotAcquired is returned by TryPostLock when another poster instance
@@ -29,6 +25,8 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+// Open connects to the database and brings its schema up to date by applying
+// any pending migrations (see migrate.go).
 func Open(ctx context.Context, url string) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
@@ -44,9 +42,9 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("ping: %w", err)
 	}
-	if _, err := pool.Exec(ctx, schema); err != nil {
+	if err := migrate(ctx, pool, migrationsFS()); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("apply schema: %w", err)
+		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 	return &Store{pool: pool}, nil
 }
