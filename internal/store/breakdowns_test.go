@@ -3,8 +3,11 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"math/big"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/plimsoll-protocol/plimsoll-indexer/internal/coverage"
@@ -172,17 +175,39 @@ func TestSavingAgainRestartsTheGracePeriod(t *testing.T) {
 	wantServed(t, s, "retried", `{"total":"5"}`)
 }
 
-// Breakdowns saved before confirmation existed are confirmed on start when a
-// snapshot carries their hash; the rest stay unserved.
-func TestExistingBreakdownsAreConfirmedBySnapshotsOnStart(t *testing.T) {
+// migrationsBeforeConfirmation is the schema as it stood before
+// 0003_breakdown_confirmation, so a test can build a database an older
+// indexer left behind.
+func migrationsBeforeConfirmation(t *testing.T) fs.FS {
+	t.Helper()
+	ms, err := loadMigrations(migrationsFS())
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := fstest.MapFS{}
+	for _, m := range ms {
+		if m.Name == "breakdown_confirmation" {
+			return older
+		}
+		older[fmt.Sprintf("%04d_%s.sql", m.Version, m.Name)] = &fstest.MapFile{Data: []byte(m.SQL)}
+	}
+	t.Fatal("no breakdown_confirmation migration")
+	return nil
+}
+
+// Breakdowns saved before confirmation existed are confirmed by the migration
+// that adds it when a snapshot carries their hash; the rest stay unserved.
+func TestExistingBreakdownsAreConfirmedBySnapshotsOnUpgrade(t *testing.T) {
 	ctx := context.Background()
-	s, url := openStore(t)
+	url := newDatabase(t)
+	if err := migrate(ctx, testPool(t, url), migrationsBeforeConfirmation(t)); err != nil {
+		t.Fatal(err)
+	}
 	execSQL(t, url, `INSERT INTO breakdowns (hash, sac, body) VALUES
 		('old-posted', $1, '{"total":"6"}'), ('old-orphan', $1, '{"total":"7"}')`, breakdownSAC)
 	execSQL(t, url, `INSERT INTO supply_snapshots
 		(event_id, sac, amount, at_ledger, breakdown_hash, poster, posted_ledger, posted_at, tx_hash)
 		VALUES ('ev-old', $1, 6, 10, 'old-posted', $2, 11, now(), 'tx-old')`, breakdownSAC, breakdownPoster)
-	s.Close()
 
 	s, err := Open(ctx, url)
 	if err != nil {
@@ -191,4 +216,5 @@ func TestExistingBreakdownsAreConfirmedBySnapshotsOnStart(t *testing.T) {
 	defer s.Close()
 	wantServed(t, s, "old-posted", `{"total":"6"}`)
 	wantNotServed(t, s, "old-orphan")
+	wantStored(t, s, "old-orphan", true)
 }
