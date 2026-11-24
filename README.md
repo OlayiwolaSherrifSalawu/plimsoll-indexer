@@ -20,7 +20,7 @@ One Go binary with four jobs and an HTTP API:
 | **Supply poster** | For every listed asset, sums Horizon's per-bucket holdings (trustlines in every auth state, claimable balances, liquidity pools, contract balances) and calls `post_supply` on the coverage ledger with the total and the SHA-256 of the breakdown. Posts when supply changes, or every `REPOST_AFTER` so freshness checks keep passing. Whether a post is due is read from the coverage ledger itself, so a stalled event ingest cannot make it repost on every tick. |
 | **Event ingester** | Reads `asset_listed`, `supply_posted`, `reserve_posted`, `reporter_set` and `reporter_revoked` from Soroban RPC into Postgres, keeping history past RPC's ~7-day retention. |
 | **State reconciler** | Reads each listed asset's `get_supply` and `get_report` back from the coverage ledger and stores anything newer than ingestion has. RPC serves only about seven days of events, so a longer ingestion gap cannot be repaired from events; the contracts always hold the latest figure. Recovered rows are marked `"source": "chain"` and carry no `tx_hash`. Reading is simulation, so it needs no key and runs even on an instance that cannot sign. |
-| **stellar.toml sync** | Resolves each issuer's `home_domain`, reads its SEP-1 `stellar.toml`, and stores the matching `[[CURRENCIES]]` entry, including `attestation_of_reserve`. |
+| **stellar.toml sync** | Resolves each issuer's `home_domain`, reads its SEP-1 `stellar.toml`, and stores the matching `[[CURRENCIES]]` entry, including `attestation_of_reserve`. Successful fetches are SHA-256 tracked per issuer; changes are logged and can be delivered to registered webhooks. |
 
 **Live API:** https://plimsoll-indexer.onrender.com/v1/assets  
 **Docs:** https://plimsoll-protocol.gitbook.io/plimsoll-protocol-docs/
@@ -66,6 +66,10 @@ The command fetches the asset's snapshot breakdown from the indexer, verifies th
 | `GET /v1/assets/{sac}/reports?limit=100` | Reserve report history |
 | `GET /v1/reporters` | Active registered reporters |
 | `GET /v1/breakdowns/{hash}` | Exact bytes of a supply breakdown |
+| `POST /v1/webhooks`, `GET /v1/webhooks`, `DELETE /v1/webhooks/{id}` | Manage authenticated issuer TOML change subscriptions |
+
+Webhook registration and signature verification are covered in the
+[webhook guide](docs/webhooks.md).
 
 Coverage in the API uses the same selection and rounding rules as the contract
 (`internal/coverage`), so the API and `coverage()` on-chain agree.
@@ -108,17 +112,34 @@ Running it in production? See the [operations runbook](docs/runbook.md).
 
 ## Docker
 
-Prefer containers? Build a distroless image and run with Compose (Postgres +
-indexer, testnet defaults):
+A pre-built multi-arch image is published to the GitHub Container Registry on
+every release tag:
 
 ```bash
-docker compose up --build
+docker pull ghcr.io/plimsoll-protocol/plimsoll-indexer:latest
+```
+
+Run the full local stack (Postgres + indexer, testnet defaults) with Compose:
+
+```bash
+docker compose up
 curl localhost:8080/healthz
 ```
+
+To build the image locally instead, replace the `image:` line in
+`docker-compose.yml` with `build: .` and run `docker compose up --build`.
 
 The image is multi-stage (`golang:1.27-bookworm` → `gcr.io/distroless/static-debian12`)
 and stays well under 30 MB. Leave `SUPPLY_POSTER_SECRET` empty in
 `docker-compose.yml` for a read-only run.
+
+The binary includes a `healthcheck` subcommand used by the Docker
+`HEALTHCHECK` instruction and by the Compose file. It requests `/healthz` on
+`localhost` (honouring `PORT`) and exits 0 on success or 1 on failure:
+
+```bash
+plimsoll-indexer healthcheck
+```
 
 ## Deploying
 

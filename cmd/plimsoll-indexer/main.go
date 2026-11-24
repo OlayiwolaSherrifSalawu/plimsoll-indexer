@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -22,12 +23,16 @@ import (
 	"github.com/plimsoll-protocol/plimsoll-indexer/internal/soroban"
 	"github.com/plimsoll-protocol/plimsoll-indexer/internal/stellartoml"
 	"github.com/plimsoll-protocol/plimsoll-indexer/internal/store"
+	"github.com/plimsoll-protocol/plimsoll-indexer/internal/webhook"
 	"github.com/plimsoll-protocol/plimsoll-indexer/internal/worker"
 )
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "verify" {
 		os.Exit(runVerifyCommand(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(runHealthcheck())
 	}
 
 	cfg, err := config.Load()
@@ -55,6 +60,16 @@ func run(cfg config.Config, log *slog.Logger) error {
 	rpc := rpcclient.NewClient(cfg.RPCURL, &http.Client{Timeout: 30 * time.Second})
 	defer rpc.Close()
 	hz := horizon.NewClient(cfg.HorizonURL)
+
+	var webhookCodec *webhook.SecretCodec
+	var webhookDispatcher *webhook.Dispatcher
+	if cfg.WebhookAdminToken != "" {
+		webhookCodec, err = webhook.NewSecretCodec(cfg.WebhookEncryptionKey)
+		if err != nil {
+			return err
+		}
+		webhookDispatcher = webhook.NewDispatcher(db, webhookCodec)
+	}
 
 	ingester := &worker.Ingester{
 		RPC:         rpc,
@@ -84,11 +99,12 @@ func run(cfg config.Config, log *slog.Logger) error {
 	go every(ctx, cfg.ReconcileInterval, log.With("job", "reconcile"), reconciler.Run)
 
 	tomlSync := &worker.TomlSync{
-		Horizon: hz,
-		Fetcher: stellartoml.NewFetcher(),
-		Store:   db,
-		MaxAge:  cfg.TomlInterval,
-		Log:     log.With("job", "toml"),
+		Horizon:  hz,
+		Fetcher:  stellartoml.NewFetcher(),
+		Store:    db,
+		Webhooks: webhookDispatcher,
+		MaxAge:   cfg.TomlInterval,
+		Log:      log.With("job", "toml"),
 	}
 	// Checks every minute; each asset is refreshed once per TOML_INTERVAL.
 	go every(ctx, time.Minute, log.With("job", "toml"), tomlSync.Run)
@@ -146,7 +162,10 @@ func run(cfg config.Config, log *slog.Logger) error {
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,
 		Handler: (&api.Server{
-			Store: db,
+			Store:             db,
+			WebhookStore:      db,
+			WebhookAdminToken: cfg.WebhookAdminToken,
+			WebhookCodec:      webhookCodec,
 			Network: api.NetworkInfo{
 				NetworkPassphrase:  cfg.NetworkPassphrase,
 				RPCURL:             cfg.RPCURL,
@@ -187,6 +206,34 @@ func every(ctx context.Context, interval time.Duration, log *slog.Logger, fn fun
 		case <-ticker.C:
 		}
 	}
+}
+
+// runHealthcheck requests /healthz on the local server and exits 0 on success
+// or 1 on any failure. It honours the PORT environment variable so it matches
+// whatever port the container is actually listening on.
+func runHealthcheck() int {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+"/healthz", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+		return 1
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "healthcheck: status %d\n", resp.StatusCode)
+	return 1
 }
 
 func newLogger(level string) *slog.Logger {

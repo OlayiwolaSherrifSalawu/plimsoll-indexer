@@ -1,4 +1,10 @@
--- Idempotent schema. Applied on every start.
+-- Migration 1: the schema as it stood when versioned migrations replaced
+-- re-applying schema.sql on every start.
+--
+-- Every statement is IF NOT EXISTS, so a database created by any earlier
+-- version of the indexer adopts this migration without changes: tables that
+-- exist are kept with their rows, columns added since are added. Do not edit
+-- it; add the next numbered file instead (see CONTRIBUTING.md).
 
 CREATE TABLE IF NOT EXISTS ingest_cursor (
     name        TEXT PRIMARY KEY,
