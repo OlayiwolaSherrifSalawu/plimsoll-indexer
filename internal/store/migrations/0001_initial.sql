@@ -1,4 +1,10 @@
--- Idempotent schema. Applied on every start.
+-- Migration 1: the schema as it stood when versioned migrations replaced
+-- re-applying schema.sql on every start.
+--
+-- Every statement is IF NOT EXISTS, so a database created by any earlier
+-- version of the indexer adopts this migration without changes: tables that
+-- exist are kept with their rows, columns added since are added. Do not edit
+-- it; add the next numbered file instead (see CONTRIBUTING.md).
 
 CREATE TABLE IF NOT EXISTS ingest_cursor (
     name        TEXT PRIMARY KEY,
@@ -79,19 +85,3 @@ CREATE TABLE IF NOT EXISTS breakdowns (
     body        TEXT NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
--- Every contract event ingestion receives, decoded or not, as RPC returned it.
--- RPC keeps events for about seven days; these let `plimsoll-indexer replay`
--- rebuild the typed tables above after a decoder change. closed_at is null when
--- RPC's ledgerClosedAt did not parse.
-CREATE TABLE IF NOT EXISTS raw_events (
-    id          TEXT PRIMARY KEY,
-    contract    TEXT NOT NULL,
-    ledger      BIGINT NOT NULL,
-    closed_at   TIMESTAMPTZ,
-    tx_hash     TEXT NOT NULL,
-    topics_xdr  TEXT[] NOT NULL,
-    value_xdr   TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS raw_events_contract_ledger
-    ON raw_events (contract, ledger);

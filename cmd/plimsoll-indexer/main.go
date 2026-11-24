@@ -23,6 +23,7 @@ import (
 	"github.com/plimsoll-protocol/plimsoll-indexer/internal/soroban"
 	"github.com/plimsoll-protocol/plimsoll-indexer/internal/stellartoml"
 	"github.com/plimsoll-protocol/plimsoll-indexer/internal/store"
+	"github.com/plimsoll-protocol/plimsoll-indexer/internal/webhook"
 	"github.com/plimsoll-protocol/plimsoll-indexer/internal/worker"
 )
 
@@ -63,6 +64,16 @@ func run(cfg config.Config, log *slog.Logger) error {
 	defer rpc.Close()
 	hz := horizon.NewClient(cfg.HorizonURL)
 
+	var webhookCodec *webhook.SecretCodec
+	var webhookDispatcher *webhook.Dispatcher
+	if cfg.WebhookAdminToken != "" {
+		webhookCodec, err = webhook.NewSecretCodec(cfg.WebhookEncryptionKey)
+		if err != nil {
+			return err
+		}
+		webhookDispatcher = webhook.NewDispatcher(db, webhookCodec)
+	}
+
 	ingester := &worker.Ingester{
 		RPC:         rpc,
 		Store:       db,
@@ -91,11 +102,12 @@ func run(cfg config.Config, log *slog.Logger) error {
 	go every(ctx, cfg.ReconcileInterval, log.With("job", "reconcile"), reconciler.Run)
 
 	tomlSync := &worker.TomlSync{
-		Horizon: hz,
-		Fetcher: stellartoml.NewFetcher(),
-		Store:   db,
-		MaxAge:  cfg.TomlInterval,
-		Log:     log.With("job", "toml"),
+		Horizon:  hz,
+		Fetcher:  stellartoml.NewFetcher(),
+		Store:    db,
+		Webhooks: webhookDispatcher,
+		MaxAge:   cfg.TomlInterval,
+		Log:      log.With("job", "toml"),
 	}
 	// Checks every minute; each asset is refreshed once per TOML_INTERVAL.
 	go every(ctx, time.Minute, log.With("job", "toml"), tomlSync.Run)
@@ -153,7 +165,10 @@ func run(cfg config.Config, log *slog.Logger) error {
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,
 		Handler: (&api.Server{
-			Store: db,
+			Store:             db,
+			WebhookStore:      db,
+			WebhookAdminToken: cfg.WebhookAdminToken,
+			WebhookCodec:      webhookCodec,
 			Network: api.NetworkInfo{
 				NetworkPassphrase:  cfg.NetworkPassphrase,
 				RPCURL:             cfg.RPCURL,

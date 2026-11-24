@@ -23,7 +23,7 @@ internal/horizon/       supply breakdown from /assets; canonical JSON + sha256
 internal/stellartoml/   SEP-1 fetch and parse
 internal/soroban/       ScVal helpers, event decoder, simulate→sign→send invoker
 internal/coverage/      data model + the contract's selection and bps rules
-internal/store/         schema.sql (idempotent) + queries; raw_events + replay
+internal/store/         migrations/NNNN_*.sql (applied once each, in order) + queries; raw_events + replay
 internal/worker/        ingest.go, poster.go, toml.go
 internal/api/           HTTP handlers (Go 1.22 mux patterns)
 ```
@@ -48,7 +48,8 @@ internal/api/           HTTP handlers (Go 1.22 mux patterns)
 - Errors are wrapped with context (`fmt.Errorf("...: %w", err)`); logging is
   `log/slog` key/value.
 - Timestamps leave the API in UTC.
-- Schema changes are additive with `IF NOT EXISTS`.
+- Schema changes are a new numbered file in `internal/store/migrations/`;
+  never edit a merged one (CONTRIBUTING.md, "Schema migrations").
 
 ## Before every commit
 
