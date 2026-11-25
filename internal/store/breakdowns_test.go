@@ -176,7 +176,7 @@ func TestSavingAgainRestartsTheGracePeriod(t *testing.T) {
 }
 
 // migrationsBeforeConfirmation is the schema as it stood before
-// 0003_breakdown_confirmation, so a test can build a database an older
+// the breakdown_confirmation migration, so a test can build a database an older
 // indexer left behind.
 func migrationsBeforeConfirmation(t *testing.T) fs.FS {
 	t.Helper()
