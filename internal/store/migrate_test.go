@@ -182,7 +182,7 @@ func TestFreshAndExistingDatabasesEndAtTheSameSchema(t *testing.T) {
 				VALUES ('CSAC', 'PUSD', 'GISS', 7, now(), 'ev-1')`)
 			execSQL(t, url, `INSERT INTO breakdowns (hash, sac, body) VALUES ('h1', 'CSAC', '{"total":"5"}')`)
 			// The snapshot that h1 backs, so the breakdown is confirmed and served
-			// after the upgrade (0003_breakdown_confirmation).
+			// after the upgrade (the breakdown_confirmation migration).
 			execSQL(t, url, `INSERT INTO supply_snapshots
 				(event_id, sac, amount, at_ledger, breakdown_hash, poster, posted_ledger, posted_at, tx_hash)
 				VALUES ('ev-h1', 'CSAC', 5, 7, 'h1', 'GPOSTER', 8, now(), 'tx-h1')`)
